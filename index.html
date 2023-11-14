@@ -1,0 +1,322 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+    <meta charset="UTF-8">
+    <meta http-equiv="X-UA-Compatible" content="IE=edge">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Video Chat</title>
+    <style>
+        body {
+            background-color: #333;
+            color: #fff;
+            font-family: 'Arial', sans-serif;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            height: 100vh;
+            margin: 0;
+            position: relative;
+        }
+
+        h1 {
+            color: #fff;
+        }
+
+        #videoContainer {
+            position: relative;
+        }
+
+        .draggable {
+            position: absolute;
+            cursor: grab;
+        }
+
+        .draggable:active {
+            cursor: grabbing;
+        }
+
+        video {
+            border-radius: 15px;
+            max-width: 100%;
+            height: auto;
+        }
+
+        button {
+            padding: 10px 20px;
+            font-size: 16px;
+            cursor: pointer;
+            border: none;
+            border-radius: 5px;
+            margin-top: 10px;
+            transition: background-color 0.3s;
+        }
+
+        button:hover {
+            background-color: #45a049;
+        }
+
+        #controls {
+            display: flex;
+            gap: 20px;
+            margin-top: 20px;
+        }
+
+        #participantsCount {
+            margin-top: 10px;
+            position: relative;
+        }
+
+        .active {
+            background-color: #ff0000;
+            color: #fff;
+        }
+
+        .animation {
+            font-size: 20px;
+            color: #4CAF50;
+            margin-top: 20px;
+            display: none;
+            animation: fadeIn 1s forwards;
+        }
+
+        .overlay {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background-color: rgba(0, 0, 0, 0.8);
+            display: none;
+            align-items: center;
+            justify-content: center;
+            z-index: 1;
+        }
+
+        @keyframes fadeIn {
+            from { opacity: 0; }
+            to { opacity: 1; }
+        }
+    </style>
+</head>
+<body>
+    <h1>Video Chat</h1>
+    <div id="controls">
+        <button id="audioButton" onclick="iniciarChamadaDeAudio()">Iniciar Chamada de Áudio</button>
+        <button id="videoButton" onclick="iniciarChamadaDeVideo()">Iniciar Chamada de Vídeo</button>
+        <button id="endButton" onclick="encerrarChamada()">Encerrar Chamada</button>
+        <button id="muteButton" onclick="alternarMudo()">Mudo</button>
+        <button id="pauseButton" onclick="alternarPausa()">Pausa</button>
+    </div>
+    <div id="videoContainer">
+        <div id="localVideo" class="draggable"></div>
+        <div id="remoteVideo" class="draggable"></div>
+    </div>
+    <div id="participantsCount">Participantes: 0</div>
+    <div id="callAnimation" class="animation">Não em chamada</div>
+<!-- Adicione este trecho ao seu HTML se necessário -->
+<div id="audioOverlay" class="overlay">
+    <!-- Conteúdo do overlay -->
+</div>
+
+    <script>
+        let localVideo;
+        let remoteVideo;
+        let peerConnection;
+        let estaMudo = false;
+        let estaPausado = false;
+        let estaEmChamadaDeAudio = false;
+
+        function resetButtons() {
+            const buttons = document.querySelectorAll('#controls button');
+            buttons.forEach(button => button.classList.remove('active'));
+        }
+
+        function updateSelectedButton(buttonId) {
+            resetButtons();
+            const selectedButton = document.getElementById(buttonId);
+            if (selectedButton) {
+                selectedButton.classList.add('active');
+            }
+        }
+
+        async function iniciarChamadaDeAudio() {
+            tipoDeChamada = 'audio';
+            estaEmChamadaDeAudio = true;
+            await iniciarChamada();
+            toggleOverlay(true);
+            updateSelectedButton('audioButton');
+        }
+
+        async function iniciarChamadaDeVideo() {
+            tipoDeChamada = 'video';
+            estaEmChamadaDeAudio = false;
+            await iniciarChamada();
+            toggleOverlay(false);
+            updateSelectedButton('videoButton');
+        }
+
+        function encerrarChamada() {
+            if (peerConnection) {
+                peerConnection.close();
+            }
+            if (localVideo) {
+                localVideo.srcObject.getTracks().forEach(track => track.stop());
+            }
+            if (remoteVideo) {
+                remoteVideo.srcObject.getTracks().forEach(track => track.stop());
+            }
+            updateParticipantsCount(0);
+            toggleCallAnimation(false);
+            estaEmChamadaDeAudio = false;
+            toggleOverlay(false);
+            resetButtons(); // Adicionado para redefinir os botões ao encerrar a chamada.
+        }
+
+        function alternarMudo() {
+            estaMudo = !estaMudo;
+            if (localVideo) {
+                localVideo.srcObject.getAudioTracks().forEach(track => {
+                    track.enabled = !estaMudo;
+                });
+            }
+            updateMuteButton();
+        }
+
+        function alternarPausa() {
+            estaPausado = !estaPausado;
+            if (localVideo) {
+                localVideo.srcObject.getVideoTracks().forEach(track => {
+                    track.enabled = !estaPausado;
+                });
+            }
+            updatePauseButton();
+            toggleOverlay(estaPausado);
+        }
+
+        async function iniciarChamada() {
+            try {
+                const stream = await navigator.mediaDevices.getUserMedia({ video: tipoDeChamada === 'video', audio: true });
+                localVideo = createVideoElement(stream);
+                remoteVideo = createVideoElement();
+
+                const configuration = { iceServers: [{ urls: 'stun:stun.l.google.com:19302' }] };
+                peerConnection = new RTCPeerConnection(configuration);
+
+                stream.getTracks().forEach(track => peerConnection.addTrack(track, stream));
+
+                peerConnection.onicecandidate = handleICECandidateEvent;
+                peerConnection.ontrack = handleTrackEvent;
+
+                document.getElementById('videoContainer').innerHTML = '';
+                document.getElementById('videoContainer').appendChild(localVideo);
+                if (!estaEmChamadaDeAudio) {
+                    document.getElementById('videoContainer').appendChild(remoteVideo);
+                }
+
+                updateParticipantsCount(1);
+                toggleCallAnimation(true);
+
+                updateMuteButton();
+                updatePauseButton();
+
+                // Adicionar lógica para sinalização, como WebSockets, para troca de informações entre os participantes
+
+                // Adicionar funcionalidade de arrastar e soltar para as webcams
+                draggableElement(document.getElementById('localVideo'));
+                draggableElement(document.getElementById('remoteVideo'));
+
+            } catch (error) {
+                console.error('Erro ao iniciar a chamada: ', error);
+            }
+        }
+
+        function handleICECandidateEvent(event) {
+            if (event.candidate) {
+                // Enviar o candidato ICE para o outro lado da conexão
+            }
+        }
+
+        function handleTrackEvent(event) {
+            const remoteVideo = createVideoElement(event.streams[0]);
+            document.getElementById('videoContainer').appendChild(remoteVideo);
+            updateParticipantsCount(document.getElementById('videoContainer').childElementCount);
+        }
+
+        function createVideoElement(stream) {
+            const video = document.createElement('video');
+            video.srcObject = stream;
+            video.autoplay = true;
+            return video;
+        }
+
+        function updateParticipantsCount(count) {
+            document.getElementById('participantsCount').textContent = `Participantes: ${count}`;
+        }
+
+        function updateMuteButton() {
+            const muteButton = document.getElementById('muteButton');
+            muteButton.textContent = estaMudo ? 'Desmutar' : 'Mudo';
+            muteButton.classList.toggle('active', estaMudo);
+        }
+
+        function updatePauseButton() {
+            const pauseButton = document.getElementById('pauseButton');
+            if (estaEmChamadaDeAudio) {
+                pauseButton.style.display = 'none';
+            } else {
+                pauseButton.style.display = 'block';
+                pauseButton.textContent = estaPausado ? 'Despausar' : 'Pausar';
+                pauseButton.classList.toggle('active', estaPausado);
+            }
+        }
+
+        function toggleCallAnimation(isVisible) {
+            const callAnimation = document.getElementById('callAnimation');
+            if (isVisible) {
+                callAnimation.textContent = 'Em chamada...';
+                callAnimation.style.display = 'block';
+            } else {
+                callAnimation.textContent = 'Não em chamada';
+                callAnimation.style.display = 'block';
+            }
+        }
+
+         let chamadaEmAndamento = false;
+
+function toggleCallAnimation(isVisible) {
+    chamadaEmAndamento = isVisible;
+    const callAnimation = document.getElementById('callAnimation');
+    callAnimation.textContent = chamadaEmAndamento ? 'Em chamada...' : 'Não em chamada';
+    callAnimation.style.display = 'block';
+}
+
+
+        let isDragging = false;
+        let offset = { x: 0, y: 0 };
+
+        function draggableElement(element) {
+            element.addEventListener('mousedown', (e) => {
+                isDragging = true;
+                offset = {
+                    x: element.offsetLeft - e.clientX,
+                    y: element.offsetTop - e.clientY
+                };
+            });
+
+            document.addEventListener('mouseup', () => {
+                isDragging = false;
+            });
+
+            document.addEventListener('mousemove', (e) => {
+                if (isDragging) {
+                    element.style.left = `${e.clientX + offset.x}px`;
+                    element.style.top = `${e.clientY + offset.y}px`;
+                }
+            });
+        }
+
+        
+    </script>
+</body>
+</html>
